@@ -1,0 +1,472 @@
+---
+title: "Crop Prediction"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+# Introduction
+
+This data comes from Kaggle as a classification problem set. The goal is to predict the most suitable crop to grow given the conditions and levels of variables. I'll go through simple EDA, some statistical analysis, and finally one or two classification machine learning methods.
+
+
+#Load Packages and Data
+
+```{r}
+library(tidyverse)
+library(corrplot)
+library(scales)
+library(tidymodels)
+library(doParallel)
+library(themis)
+library(vip)
+library(usemodels)
+
+data <- read_csv("Crop_recommendation.csv")
+```
+
+
+#Checking for Nas
+
+I believe this data is pretty clean, but I like to check and handle NAs before going forward with other manipulation and analysis. The summary() function will tell me if there are NAs present in a column, but also the code after that is quite reliable in giving me a quick glance at the number of NAs in a column. We're all set and good to continue.
+
+```{r}
+summary(data)
+```
+
+```{r}
+colSums(is.na(data))
+```
+
+# EDA and Manipulation
+
+The data set only has 7 predictors and 1 outcome variables with 2,200 rows. This data already looks pretty clean so I won't have to do too much of that here, but I'll change some names and data types before going forward.
+
+Here is a breakdown of what the different variables tell me:
+
+N – Nitrogen content in the soil (in mg/kg)
+P – Phosphorus content in the soil (in mg/kg)
+K – Potassium content in the soil (in mg/kg)
+temperature – Average temperature in °C
+humidity – Average relative humidity in %
+ph – Soil pH value
+rainfall – Rainfall in mm
+
+```{r}
+str(data)
+```
+
+```{r}
+#Just changing names make looking quicker and easier
+data <- data %>% 
+  rename(nitrogen = 'N',
+         phosphorous = 'P',
+         potassium = 'K',
+         temp = 'temperature')
+
+#Outcome variable needs to be switched to factor for modeling
+data$label <- as.factor(data$label)
+```
+
+I want to see how many labels there are in the outcome variable. If there are more than say 4, then I'll have to deal with that when I create the recipe in tidymodels.
+
+```{r}
+unique(data$label)
+```
+
+Wow ok, there are 22 different levels in the outcome variable. I think I'll group them into categories like "fruit", "grain", "legume", etc. Perhaps I'll make that the new outcome variable, but it's yet to be seen. Let's do this manipulation below.
+
+First, I'll rename the "label" column.
+
+```{r}
+data <- data %>% 
+  rename(crop = 'label')
+```
+
+Now I'll create the new variable. I am grouping jute, cotton, and coffee into an industrial category instead of an Other.
+
+```{r}
+data <- data %>% 
+  mutate(group = case_when(
+    crop %in% c("banana", "mango","pomegranate","grapes","watermelon","muskmelon","apple","orange","papaya","coconut") ~ "Fruit",
+    crop %in% c("rice","maize") ~ "Grain",
+    crop %in% c("chickpea","kidneybeans","pigeonpeas","mothbeans","mungbean","blackgram","lentil") ~ "Legume",
+    crop %in% c("coffee","jute","cotton") ~ "Industrial"
+  ))
+
+data$group <- as.factor(data$group)
+```
+
+```{r}
+unique(data$group)
+```
+
+```{r}
+data %>% 
+  count(group)
+```
+
+The data is imbalanced here so that may be tricky when building the models later.
+# Visualizations
+
+Now I want to see if there are any huge differences levels of variables based on what type of crop is grown. Since the data is small enough, I don't think it would be too much to do box plots for each variable compared to the outcome variable with a correlation plot at the end. Typically, this could be tricky with many predictor variables, but 7 isn't too much.
+
+```{r}
+ggplot(data, aes(x = group, y = potassium))+
+  geom_boxplot()+
+  labs(title = "Potassium level in different crop groups", y = "K level (in mg/kg)")
+```
+
+According to the data, fruit enjoys a higher level of potassium in the soil. Fruit and legumes have some outliers in the data here and that should be noted. Overall, not too much variation in the medians. I want to look a little more into the outliers of fruit and legumes to see why there might be a significant amount of K levels.
+
+```{r}
+data %>% 
+  filter(group == "Fruit" & potassium > 170) %>% 
+  group_by(crop) %>% 
+  summarise(mean_K = mean(potassium))
+```
+
+```{r}
+data %>% 
+  filter(group == "Legume" & potassium > 50) %>% 
+  group_by(crop) %>% 
+  summarise(mean_K = mean(potassium))
+```
+
+So in the fruit category, grapes and apples require a higher than average level of potassium when compared to the other fruits. In the legume group, chickpeas account for the outliers, again needing more than the average level of potassium compared to other legumes.
+
+```{r}
+ggplot(data, aes(x = group, y = nitrogen))+
+  geom_boxplot()+
+  labs(title = "Nitrogen level in different crop groups", y = "N level (in mg/kg)")
+```
+
+Grains and industrial crops need higher levels of nitrogen than fruit and legumes.
+
+```{r}
+ggplot(data, aes(x = group, y = phosphorous))+
+  geom_boxplot()+
+  labs(title = "Phosphorous level in different crop groups", y = "P level (in mg/kg)")
+```
+
+There isn't too much variation here. It looks like most crops enjoy around 50 mm/kg of phosphorous. Fruit on the other hand typically requires about half of that at around 30.
+
+```{r}
+ggplot(data, aes(x = group, y = temp))+
+  geom_boxplot()+
+  labs(title = "Average Temperature level in different crop groups", y = "Temp. in C")
+```
+
+All crops have a specific growing season and from this plot, it appears most of these crops share the same growing season. 
+
+```{r}
+ggplot(data, aes(x = group, y = humidity))+
+  geom_boxplot()+
+  labs(title = "Humidity level in different crop groups", y = "Humidity in %")
+```
+
+Here is where we get a lot of variation. The fruit requires a substantial amount of humidity at what appears to be about 85-90%. Legume's median hovers around 60%, but can be as low as 25%. I want to check out these outliers similar to what I did above with potassium levels. Perhaps we will get some insight into different types of fruit.
+
+```{r}
+data %>% 
+  filter(humidity < 60 & group == "Fruit") %>% 
+  group_by(crop) %>% 
+  summarise(mean_humidity = mean(humidity))
+```
+
+Mangoes account for the outliers in Fruit humidity. So this tells me mangoes like a much drier climate compared to other fruits. If anything they prefer the climate of legumes.
+
+```{r}
+ggplot(data, aes(x = group, y = ph))+
+  geom_boxplot()+
+  labs(title = "pH level in different crop groups", y = "pH")
+```
+
+pH levels don't vary as much.
+
+```{r}
+ggplot(data, aes(x = group, y = rainfall))+
+  geom_boxplot()+
+  labs(title = "Rainfall (water) level in different crop groups", y = "Rainfall in mm")
+```
+
+Lastly, this plot tells me grains and industrial crops typically require a bit more water than fruit and legumes. Below I can see which types of fruits and legumes are the outliers requiring the most watering.
+
+```{r}
+data %>% 
+  filter(group == "Fruit" | group == "Legume" & rainfall > 150) %>% 
+  group_by(crop) %>% 
+  count(crop)
+```
+
+Let me summarize what I learned about each crop group and what they require to grow below:
+
+Fruit - Medium levels of rainfall, a pH of ~6 to 6.5, high humidity, likes ~25 degrees Celsius, low levels of P, medium levels of N, high levels of K
+
+Grain - High levels of rainfall, pH of ~6 to 6.5, medium humidity, likes ~25 degrees Celsius, medium levels of P, high levels N, medium levels of K
+
+Industrial - High levels of rainfall, pH of ~6.5 to 7.3, medium humidity, likes ~25 degrees Celsius, medium levels of P, high levels of N, medium levels of K
+
+Legume - Low levels of rainfall, pH of ~6 to 7.5, medium to low humidity, likes ~25 degrees Celsius, high levels of P, low levels of N, low levels of K
+
+Now keep in mind this is all relative and quite a low level summary of our findings.
+
+Now let me see a correlation plot to get a different view of the data. Okay, the level of phosphorous and potassium are correlated here. It looks like at a level of about 0.7 which is notable. I'll have to note this for model building later.
+```{r}
+data %>% 
+  select(1:7) %>% 
+  cor() %>% 
+  corrplot()
+```
+
+#Statistical Analysis
+
+Earlier I saw that P and K are moderately correlated and I want to get under the hood for that to see if it's statistically significant along with the exact correlation.
+
+```{r}
+cor.test(data$phosphorous,
+         data$potassium)
+```
+
+Oh wow okay these are actually highly positively correlated and significant. So if K levels are high, so is P. It's important to know if your data has variables that are highly correlated with one another, as having multiple correlated predictors can lead to bad models. Tidymodels makes this easy to address.
+
+```{r}
+summary(aov(phosphorous ~ group, data = data))
+
+summary(aov(nitrogen ~ group, data = data))
+
+summary(aov(potassium ~ group, data = data))
+
+summary(aov(humidity ~ group, data = data))
+
+summary(aov(temp ~ group, data = data))
+
+summary(aov(rainfall ~ group, data = data))
+
+summary(aov(ph ~ group, data = data))
+```
+
+So all of these variables are statistically significant according to their p values. Since the data set is so small with only 7 predictors, it makes sense they are all significant, I just didn't imagine they would all have such low p values. While I normally would check each individual variable with an ANOVA, this data set has only a few predictors.
+
+I can use a Tukey HSD test to precisely see which values specifically are significant. It's like zooming in further after an ANOVA test.
+
+```{r}
+TukeyHSD(aov(phosphorous ~ group, data = data))
+
+TukeyHSD(aov(nitrogen ~ group, data = data))
+
+TukeyHSD(aov(potassium ~ group, data = data))
+
+TukeyHSD(aov(humidity ~ group, data = data))
+
+TukeyHSD(aov(temp ~ group, data = data))
+
+TukeyHSD(aov(rainfall ~ group, data = data))
+
+TukeyHSD(aov(ph ~ group, data = data))
+```
+
+From this I can see it's fruit that has significantly higher levels of potassium levels than grain, industrial crops, and legumes.
+
+# Model Building
+
+Things to note:
+- phosphorous and potassium are correlated
+- If "group" is the outcome variable, there is some imbalance
+- If "crop" is the outcome variable, there are many levels, but they are pretty balanced
+
+## Data Partition
+
+Splitting the data into the test and training set.
+
+```{r}
+
+data2 <- data %>% 
+  select(-crop)
+
+set.seed(222)
+
+split <- initial_split(data2,strata = group) 
+train <- training(split)
+test <- testing(split)
+
+```
+
+## Recipe Creation
+
+Creating the recipe to use in model building.
+
+```{r}
+recipe <- recipe(group ~., data = train) %>% 
+  step_normalize(all_numeric_predictors())%>% 
+  step_corr(all_numeric_predictors(),threshold = .5) %>% 
+  step_dummy(all_outcomes(), one_hot = T) %>% 
+  step_smote(group) #balance out the variables
+
+```
+
+## Model Specification
+
+I'll use multinomial logistic regression and XGBoosted models. The boosted model will have a lot more tuning than the multinom model. I've never used a multinomial logistic regression model in tidymodels, typically it's quiet easy to fit with the standard package, but I am transitioning to working soley in the tidymodels universe.
+
+Here I build the model specifications to tell tidymodels what I want to do. XGBoost requires more tuning than a logistic regression model.
+
+```{r}
+#XGBoost
+
+boost_spec <- boost_tree(
+  trees = 1000,
+  tree_depth = tune(), min_n = tune(), loss_reduction = tune(),
+  learn_rate = tune(),
+  sample_size = tune(), mtry = tune()
+) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+
+#Logistic Regression
+
+log_spec <- multinom_reg(penalty = 0.1) %>% 
+  set_engine("nnet") %>% 
+  set_mode("classification")
+```
+
+## Build the Model Workflows
+
+I'll need to create the workflows for the models to be run.
+```{r}
+#Boost
+boost_wf <- workflow() %>% 
+  add_formula(group ~.) %>% 
+  add_model(boost_spec)
+
+#Log
+log_wf <- workflow() %>% 
+  add_formula(group ~.) %>% 
+  add_model(log_spec)
+```
+
+## Tuning XGBoost Model and Creating K Folds
+
+Here are two instances of tuning the boosted model and creating k folds cross validation.
+```{r}
+
+#Cross validation resampling with 10 folds
+set.seed(555)
+
+cv <- vfold_cv(train, v = 10, strata = group)
+#Tuning hyperparameters for boosted model
+boost_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(),train),
+  learn_rate(),
+  size = 25
+)
+
+set.seed(45632)
+
+registerDoParallel()
+
+xgb_res <- tune_grid(
+  boost_wf,
+  resamples = cv,
+  grid = boost_grid,
+  control = control_grid(save_pred = TRUE, verbose = TRUE)
+)
+
+
+```
+
+## Evaluation and Fitting for XGBoost and Logistic Regression
+
+There may be some overfitting going on here.
+```{r}
+xgb_res %>% 
+show_best(metric = "roc_auc")
+
+best_auc_boost <- select_best(xgb_res, metric = "roc_auc")
+
+#Now finalize the model and get it ready to use on the test set
+final_xgb <- finalize_workflow(boost_wf, best_auc_boost)
+
+final_xgb
+```
+
+### Variable Importance on Boost
+
+The levels of humidity, K, and N were the most important for the model in classifying the groups.pH and temperature are the least influential in model building.
+
+```{r}
+final_xgb %>% 
+  fit(data = train) %>% 
+  pull_workflow_fit() %>% 
+  vip(geom = "point")
+```
+
+### Fitting Multinomial with Resamples
+
+Here I am fitting the logistic regression model with the cv resamples
+```{r}
+set.seed(33)
+
+registerDoParallel()
+
+ctrl_pred <- control_resamples(save_pred = TRUE)
+log_resamp <- fit_resamples(log_wf, cv, control = ctrl_pred)
+
+```
+
+I can see how the model performed on the training data with the code below. Oh nice, an ROC of 98% and an accuracy of 91% is pretty good.
+
+```{r}
+log_resamp %>% 
+  show_best(metric = "roc_auc")
+
+#Let's pick the best one
+
+best_multinom <- log_resamp %>% 
+  select_best(metric = "roc_auc")
+
+#Now finalize the model and get it ready to use on the test set
+final_multinom_wf <- finalize_workflow(log_wf, best_multinom)
+
+```
+
+Let me just quickly see this broken out into a confusion matrix. It looks like the model had an easier time classifying fruit and legumes than it did grains and especially industrial crops. This is probably because there are more fruits in the data than those two variables.
+
+```{r}
+log_resamp %>% 
+  collect_predictions() %>% 
+  conf_mat(group, .pred_class)
+```
+
+With augment I can see in detail how accurate the prediction for each class was on the training data.
+```{r}
+#augment(log_resamp)
+```
+
+## Evaluating Models on Test Set and Conclusion
+
+```{r}
+
+#XGBoost
+final_boost_result <- last_fit(final_xgb, split)
+
+final_boost_result %>% 
+  collect_metrics()
+
+#Multinomial Logistic Regression
+
+last_log_fit <- last_fit(final_multinom_wf, split)
+
+collect_metrics(last_log_fit)
+
+```
+
+The multinomial logistic regression model did quite well on the data with an ROC of 99%. Woah and I had an accuracy for the boosted model of 99%. Boosted models are prone to overfitting, but I am not seeing this here as the model performed well on the test set, as well as the training set. The outliers in the data are not concerning to me as they are all a particular crop that just requires a lot more or less of a certain variable.
+
+I discovered that when predicting suitable crops to grow given certain variables, humidity, potassium, and nitrogen are the three most important factors. If a field with these parameters in the soil as well as the outside conditions (rainfall, temp), my models can predict with essentially 98% accuracy what crop type would be best suited.
+
