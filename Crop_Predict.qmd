@@ -10,7 +10,6 @@ editor_options:
 
 This data comes from Kaggle as a classification problem set. The goal is to predict the most suitable crop to grow given the conditions and levels of variables. I'll go through simple EDA, some statistical analysis, and finally one or two classification machine learning methods.
 
-
 #Load Packages and Data
 
 ```{r}
@@ -26,8 +25,7 @@ library(usemodels)
 data <- read_csv("Crop_recommendation.csv")
 ```
 
-
-#Checking for Nas
+# Checking for NAs
 
 I believe this data is pretty clean, but I like to check and handle NAs before going forward with other manipulation and analysis. The summary() function will tell me if there are NAs present in a column, but also the code after that is quite reliable in giving me a quick glance at the number of NAs in a column. We're all set and good to continue.
 
@@ -45,13 +43,7 @@ The data set only has 7 predictors and 1 outcome variables with 2,200 rows. This
 
 Here is a breakdown of what the different variables tell me:
 
-N – Nitrogen content in the soil (in mg/kg)
-P – Phosphorus content in the soil (in mg/kg)
-K – Potassium content in the soil (in mg/kg)
-temperature – Average temperature in °C
-humidity – Average relative humidity in %
-ph – Soil pH value
-rainfall – Rainfall in mm
+N -- Nitrogen content in the soil (in mg/kg) P -- Phosphorus content in the soil (in mg/kg) K -- Potassium content in the soil (in mg/kg) temperature -- Average temperature in °C humidity -- Average relative humidity in % ph -- Soil pH value rainfall -- Rainfall in mm
 
 ```{r}
 str(data)
@@ -107,8 +99,7 @@ data %>%
   count(group)
 ```
 
-The data is imbalanced here so that may be tricky when building the models later.
-# Visualizations
+The data is imbalanced here so that may be tricky when building the models later. \# Visualizations
 
 Now I want to see if there are any huge differences levels of variables based on what type of crop is grown. Since the data is small enough, I don't think it would be too much to do box plots for each variable compared to the outcome variable with a correlation plot at the end. Typically, this could be tricky with many predictor variables, but 7 isn't too much.
 
@@ -158,7 +149,7 @@ ggplot(data, aes(x = group, y = temp))+
   labs(title = "Average Temperature level in different crop groups", y = "Temp. in C")
 ```
 
-All crops have a specific growing season and from this plot, it appears most of these crops share the same growing season. 
+All crops have a specific growing season and from this plot, it appears most of these crops share the same growing season.
 
 ```{r}
 ggplot(data, aes(x = group, y = humidity))+
@@ -202,17 +193,18 @@ data %>%
 
 Let me summarize what I learned about each crop group and what they require to grow below:
 
-Fruit - Medium levels of rainfall, a pH of ~6 to 6.5, high humidity, likes ~25 degrees Celsius, low levels of P, medium levels of N, high levels of K
+Fruit - Medium levels of rainfall, a pH of \~6 to 6.5, high humidity, likes \~25 degrees Celsius, low levels of P, medium levels of N, high levels of K
 
-Grain - High levels of rainfall, pH of ~6 to 6.5, medium humidity, likes ~25 degrees Celsius, medium levels of P, high levels N, medium levels of K
+Grain - High levels of rainfall, pH of \~6 to 6.5, medium humidity, likes \~25 degrees Celsius, medium levels of P, high levels N, medium levels of K
 
-Industrial - High levels of rainfall, pH of ~6.5 to 7.3, medium humidity, likes ~25 degrees Celsius, medium levels of P, high levels of N, medium levels of K
+Industrial - High levels of rainfall, pH of \~6.5 to 7.3, medium humidity, likes \~25 degrees Celsius, medium levels of P, high levels of N, medium levels of K
 
-Legume - Low levels of rainfall, pH of ~6 to 7.5, medium to low humidity, likes ~25 degrees Celsius, high levels of P, low levels of N, low levels of K
+Legume - Low levels of rainfall, pH of \~6 to 7.5, medium to low humidity, likes \~25 degrees Celsius, high levels of P, low levels of N, low levels of K
 
 Now keep in mind this is all relative and quite a low level summary of our findings.
 
 Now let me see a correlation plot to get a different view of the data. Okay, the level of phosphorous and potassium are correlated here. It looks like at a level of about 0.7 which is notable. I'll have to note this for model building later.
+
 ```{r}
 data %>% 
   select(1:7) %>% 
@@ -271,10 +263,7 @@ From this I can see it's fruit that has significantly higher levels of potassium
 
 # Model Building
 
-Things to note:
-- phosphorous and potassium are correlated
-- If "group" is the outcome variable, there is some imbalance
-- If "crop" is the outcome variable, there are many levels, but they are pretty balanced
+Things to note: - phosphorous and potassium are correlated - If "group" is the outcome variable, there is some imbalance - If "crop" is the outcome variable, there are many levels, but they are pretty balanced
 
 ## Data Partition
 
@@ -334,6 +323,7 @@ log_spec <- multinom_reg(penalty = 0.1) %>%
 ## Build the Model Workflows
 
 I'll need to create the workflows for the models to be run.
+
 ```{r}
 #Boost
 boost_wf <- workflow() %>% 
@@ -349,6 +339,7 @@ log_wf <- workflow() %>%
 ## Tuning XGBoost Model and Creating K Folds
 
 Here are two instances of tuning the boosted model and creating k folds cross validation.
+
 ```{r}
 
 #Cross validation resampling with 10 folds
@@ -383,6 +374,7 @@ xgb_res <- tune_grid(
 ## Evaluation and Fitting for XGBoost and Logistic Regression
 
 There may be some overfitting going on here.
+
 ```{r}
 xgb_res %>% 
 show_best(metric = "roc_auc")
@@ -409,6 +401,7 @@ final_xgb %>%
 ### Fitting Multinomial with Resamples
 
 Here I am fitting the logistic regression model with the cv resamples
+
 ```{r}
 set.seed(33)
 
@@ -444,6 +437,7 @@ log_resamp %>%
 ```
 
 With augment I can see in detail how accurate the prediction for each class was on the training data.
+
 ```{r}
 #augment(log_resamp)
 ```
@@ -469,4 +463,3 @@ collect_metrics(last_log_fit)
 The multinomial logistic regression model did quite well on the data with an ROC of 99%. Woah and I had an accuracy for the boosted model of 99%. Boosted models are prone to overfitting, but I am not seeing this here as the model performed well on the test set, as well as the training set. The outliers in the data are not concerning to me as they are all a particular crop that just requires a lot more or less of a certain variable.
 
 I discovered that when predicting suitable crops to grow given certain variables, humidity, potassium, and nitrogen are the three most important factors. If a field with these parameters in the soil as well as the outside conditions (rainfall, temp), my models can predict with essentially 98% accuracy what crop type would be best suited.
-
